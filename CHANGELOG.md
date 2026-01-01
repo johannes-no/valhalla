@@ -2,6 +2,11 @@
 * **Removed**
 * **Bug Fix**
 * **Enhancement**
+
+## Release Date: 2026-01-01 Valhalla 3.5.2
+* **Removed**
+* **Bug Fix**
+* **Enhancement**
    * ADDED: Assign cost factors to linear features [#5584](https://github.com/valhalla/valhalla/pull/5584)
    * ADDED: optional libvalhalla_test install target [#5719](https://github.com/valhalla/valhalla/pull/5719)
    * CHANGED: Get rid of temporary std::vector in GraphTile::GetRestrictions [#5688](https://github.com/valhalla/valhalla/pull/5688)
