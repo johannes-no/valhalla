@@ -160,6 +160,7 @@ This is the most important navigation aid. Large files like `pbfgraphparser.cc` 
 | Configuration | `boost::property_tree::ptree`, JSON format. Generate defaults: `valhalla_build_config`. Access: `config.get<T>("section.key")` |
 | Protobuf message definitions | `proto/` — root message is `Api` in `api.proto` |
 | Live traffic | Separate overlay (`traffic.tar`), format in `valhalla/baldr/traffictile.h`. Test via `test::customize_live_traffic_data()` |
+| Custom attributes sidecar | Per-edge float overlay (`custom_attributes.tar`). Format: `valhalla/baldr/custom_attributes_tile.h`. Build script: `scripts/build_custom_attributes_tar.py`. Config key: `mjolnir.custom_attributes_extract`. Costing param: `use_custom_attribute` in `Costing.Options`. Loaded by `GraphReader` alongside traffic; attached to `GraphTile` via `custom_attributes_tile()`. Response field: `edge.custom_attribute` in `trace_attributes`. Full guide: `docs/docs/custom_attributes.md` |
 | Historical/predicted speeds | Full profiles: `valhalla_add_predicted_traffic` → `valhalla/baldr/predictedspeeds.h`. Lightweight: `free_flow_speed`/`constrained_flow_speed` on `DirectedEdge`. Test via `test::customize_historical_traffic()` |
 | Speed resolution at runtime | `GraphTile::GetSpeed()` — live → predicted → constrained → freeflow → base. See `docs/docs/speeds.md` |
 | Time-dependent routing | `depart_at`/`arrive_by` params; timezone data from `tz.sqlite` |

@@ -362,6 +362,10 @@ message Costing {
     oneof has_low_class_factor {
       float low_class_factor = 97;
     }
+
+    oneof has_use_custom_attribute {
+      float use_custom_attribute = 98;              // Weight for custom attribute from sidecar tar, default 0 (disabled)
+    }
   }
 
   oneof has_options {

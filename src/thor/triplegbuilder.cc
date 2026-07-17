@@ -1622,6 +1622,12 @@ TripLeg_Edge* AddTripEdge(const AttributesController& controller,
     trip_edge->set_truck_route(true);
   }
 
+  if (controller(kEdgeCustomAttribute)) {
+    if (const auto* cat = graphtile->custom_attributes_tile()) {
+      trip_edge->set_custom_attribute(cat->value(idx));
+    }
+  }
+
   /////////////////////////////////////////////////////////////////////////////
   // Process transit information
   if (edge_itr->trip_id && (directededge->use() == Use::kRail || directededge->use() == Use::kBus)) {

@@ -16,6 +16,7 @@
 #include <valhalla/baldr/nodeinfo.h>
 #include <valhalla/baldr/nodetransition.h>
 #include <valhalla/baldr/predictedspeeds.h>
+#include <valhalla/baldr/custom_attributes_tile.h>
 #include <valhalla/baldr/sign.h>
 #include <valhalla/baldr/signinfo.h>
 #include <valhalla/baldr/traffictile.h>
@@ -154,7 +155,8 @@ public:
    */
   static graph_tile_ptr Create(const std::string& tile_dir,
                                const GraphId& graphid,
-                               std::unique_ptr<const GraphMemory>&& traffic_memory = nullptr);
+                               std::unique_ptr<const GraphMemory>&& traffic_memory = nullptr,
+                               std::unique_ptr<const GraphMemory>&& custom_attributes_memory = nullptr);
 
   /**
    * Constructs with a given the graph Id, pointer to the tile data, and the
@@ -173,7 +175,8 @@ public:
    */
   static graph_tile_ptr Create(const GraphId& graphid,
                                std::unique_ptr<const GraphMemory>&& memory,
-                               std::unique_ptr<const GraphMemory>&& traffic_memory = nullptr);
+                               std::unique_ptr<const GraphMemory>&& traffic_memory = nullptr,
+                               std::unique_ptr<const GraphMemory>&& custom_attributes_memory = nullptr);
 
   /**
    * Constructs a tile given a url for the tile using curl
@@ -195,7 +198,8 @@ public:
                                      uint64_t range_offset = 0,
                                      uint64_t range_size = 0,
                                      const std::filesystem::path& id_txt_path = "",
-                                     std::optional<uint64_t> id_checksum = std::nullopt);
+                                     std::optional<uint64_t> id_checksum = std::nullopt,
+                                     std::unique_ptr<const GraphMemory>&& custom_attributes_memory = nullptr);
 
   /**
    * Construct a tile given a url for the tile using curl
@@ -962,6 +966,10 @@ public:
     return traffic_tile;
   }
 
+  const CustomAttributesTile* custom_attributes_tile() const {
+    return custom_attributes_tile_.get();
+  }
+
 protected:
   // base location of the tile, comes from `header()->base_ll()`, but we cache it here to avoid extra
   // computation on the hot path
@@ -1071,6 +1079,9 @@ protected:
   // Pointer to live traffic data (can be nullptr if not active)
   TrafficTile traffic_tile{nullptr};
 
+  // Per-edge custom attribute data from sidecar tar (can be nullptr if not loaded)
+  std::unique_ptr<CustomAttributesTile> custom_attributes_tile_;
+
   // GraphTiles are noncopyable.
   GraphTile(const GraphTile&) = delete;
   GraphTile& operator=(const GraphTile&) = delete;
@@ -1091,7 +1102,8 @@ protected:
    */
   GraphTile(const GraphId& graphid,
             std::unique_ptr<const GraphMemory> memory,
-            std::unique_ptr<const GraphMemory> traffic_memory = nullptr);
+            std::unique_ptr<const GraphMemory> traffic_memory = nullptr,
+            std::unique_ptr<const GraphMemory> custom_attributes_memory = nullptr);
 
   /**
    * Constructor given the graph Id, pointer to the tile data, and the
@@ -1102,7 +1114,8 @@ protected:
    */
   GraphTile(const std::string& tile_dir,
             const GraphId& graphid,
-            std::unique_ptr<const GraphMemory>&& traffic_memory = nullptr);
+            std::unique_ptr<const GraphMemory>&& traffic_memory = nullptr,
+            std::unique_ptr<const GraphMemory>&& custom_attributes_memory = nullptr);
 
   /**
    * Initialize pointers to internal tile data structures.
@@ -1126,7 +1139,8 @@ protected:
    * @return a pointer to a graphtile if it  has been successfully initialized with
    *         the uncompressed data, or nullptr
    */
-  static graph_tile_ptr DecompressTile(const GraphId& graphid, const std::vector<char>& compressed);
+  static graph_tile_ptr DecompressTile(const GraphId& graphid, const std::vector<char>& compressed,
+                                       std::unique_ptr<const GraphMemory> custom_attributes_memory = nullptr);
 };
 
 } // namespace baldr

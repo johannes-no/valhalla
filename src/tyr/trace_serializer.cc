@@ -86,6 +86,9 @@ void serialize_edges(const AttributesController& controller,
       if (controller(kEdgeTruckRoute)) {
         writer("truck_route", edge.truck_route());
       }
+      if (controller(kEdgeCustomAttribute) && edge.has_custom_attribute()) {
+        writer("custom_attribute", edge.custom_attribute());
+      }
       if (controller(kEdgeTruckSpeed) && (edge.truck_speed() > 0)) {
         writer("truck_speed", serialize_speed(edge.truck_speed()));
       }
