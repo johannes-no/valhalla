@@ -242,6 +242,10 @@ DynamicCost::DynamicCost(const Costing& costing,
     min_linear_cost_factor_ =
         std::min(min_linear_cost_factor_, cost_factors.sort_and_find_smallest());
   }
+
+  for (const auto& name : costing.custom_attribute_names()) {
+    custom_attribute_names_.push_back(name);
+  }
 }
 
 DynamicCost::~DynamicCost() {

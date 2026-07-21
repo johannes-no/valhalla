@@ -4,8 +4,9 @@ Build a custom_attributes.tar from an existing valhalla_tiles.tar.
 
 Binary format per .cab file (matches CustomAttributesTileHeader in
 valhalla/baldr/custom_attributes_tile.h):
-  [0:4]              uint32_t  edge_count
-  [4:4+edge_count*4] float32[edge_count]  one value per directed edge
+  [0:4]                    uint32_t  edge_count
+  [4:8]                    uint32_t  num_attributes
+  [8:8+edge_count*N*4]     float32[edge_count * num_attributes]  row-major by edge
 
 The resulting tar contains:
   <level>/<path>.cab  – one file per tile, same path structure as .gph
@@ -13,10 +14,13 @@ The resulting tar contains:
 
 import argparse
 import io
+import json
+import os
 import random
 import struct
 import sys
 import tarfile
+from pathlib import Path
 
 
 # Offset of the uint64 that holds nodecount_ / directededgecount_ inside
@@ -50,14 +54,19 @@ def _tile_path_to_cab(path: str) -> str:
     raise ValueError(f"Unexpected tile suffix in path: {path!r}")
 
 
-def _build_cab(edge_count: int, randomize: bool, default_value: float,
-               random_max: float = 1.0) -> bytes:
-    header = struct.pack("<I", edge_count)
+def _build_cab(edge_count: int, num_attributes: int, randomize: bool,
+               default_values: list[float], random_max: float = 1.0) -> bytes:
+    """Build binary .cab payload for one tile."""
+    header = struct.pack("<II", edge_count, num_attributes)
     if randomize:
-        values = [random.uniform(0.0, random_max) for _ in range(edge_count)]
+        values = [random.uniform(0.0, random_max)
+                  for _ in range(edge_count * num_attributes)]
     else:
-        values = [default_value] * edge_count
-    data = struct.pack(f"<{edge_count}f", *values)
+        # default_values has one entry per attribute; replicate across all edges
+        values = [default_values[a % len(default_values)]
+                  for _ in range(edge_count)
+                  for a in range(num_attributes)]
+    data = struct.pack(f"<{edge_count * num_attributes}f", *values)
     return header + data
 
 
@@ -67,8 +76,8 @@ def _add_bytes_to_tar(tf: tarfile.TarFile, name: str, data: bytes) -> None:
     tf.addfile(info, io.BytesIO(data))
 
 
-def build(valhalla_tar: str, output_tar: str, randomize: bool, default_value: float,
-          random_max: float = 1.0) -> None:
+def build(valhalla_tar: str, output_tar: str, num_attributes: int, randomize: bool,
+          default_values: list[float], random_max: float = 1.0) -> None:
     with tarfile.open(valhalla_tar, "r:*") as src_tf, tarfile.open(output_tar, "w:") as dst_tf:
 
         tiles_processed = 0
@@ -94,7 +103,8 @@ def build(valhalla_tar: str, output_tar: str, randomize: bool, default_value: fl
                 tiles_skipped += 1
                 continue
 
-            cab_bytes = _build_cab(edge_count, randomize, default_value, random_max)
+            cab_bytes = _build_cab(edge_count, num_attributes, randomize,
+                                   default_values, random_max)
             _add_bytes_to_tar(dst_tf, cab_path, cab_bytes)
             tiles_processed += 1
 
@@ -107,8 +117,21 @@ def build(valhalla_tar: str, output_tar: str, randomize: bool, default_value: fl
     )
 
 
+def _parse_default_values(raw: str, num_attributes: int) -> list[float]:
+    """Parse a comma-separated list of floats; pad/truncate to num_attributes."""
+    parts = [float(x.strip()) for x in raw.split(",") if x.strip()]
+    if not parts:
+        parts = [0.0]
+    # Pad with the last value if fewer entries than num_attributes
+    while len(parts) < num_attributes:
+        parts.append(parts[-1])
+    return parts[:num_attributes]
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Build a custom_attributes.tar sidecar from an existing valhalla_tiles.tar."
+    )
     parser.add_argument(
         "--tiles-tar",
         default="/data/valhalla_tiles.tar",
@@ -120,9 +143,23 @@ def main() -> None:
         help="Path for the output custom_attributes.tar (default: /data/custom_attributes.tar)",
     )
     parser.add_argument(
+        "--num-attributes",
+        type=int,
+        default=1,
+        help="Number of float attributes stored per directed edge (default: 1)",
+    )
+    parser.add_argument(
+        "--attribute-names",
+        type=str,
+        default=None,
+        help="Comma-separated attribute names matching mjolnir.custom_attributes_names in the "
+             "server config (informational only, not written to the .cab binary)",
+    )
+    parser.add_argument(
         "--random",
         action="store_true",
-        help="Assign random float values in [0.0, --random-max) to each edge instead of the default value",
+        help="Assign random float values in [0.0, --random-max) to each slot instead of "
+             "the default value",
     )
     parser.add_argument(
         "--random-max",
@@ -131,21 +168,43 @@ def main() -> None:
         help="Upper bound (exclusive) for random values when --random is set (default: 1.0)",
     )
     parser.add_argument(
+        "--default-values",
+        type=str,
+        default="0.0",
+        help="Comma-separated default float values, one per attribute (default: 0.0). "
+             "Fewer values than --num-attributes repeats the last value.",
+    )
+    # Legacy single-value alias kept for backwards compatibility with old invocations.
+    parser.add_argument(
         "--default-value",
         type=float,
-        default=0.0,
-        help="Default value for all edges when --random is not set (default: 0.0)",
+        default=None,
+        help=argparse.SUPPRESS,  # hidden alias for --default-values with a single value
     )
     args = parser.parse_args()
 
+    # Resolve effective num_attributes
+    num_attributes = max(1, args.num_attributes)
+
+    # --default-value (legacy) overrides --default-values when provided
+    if args.default_value is not None:
+        default_values = [args.default_value] * num_attributes
+    else:
+        default_values = _parse_default_values(args.default_values, num_attributes)
+
     print(f"Reading tiles from : {args.tiles_tar}", file=sys.stderr)
     print(f"Writing output to  : {args.output}", file=sys.stderr)
+    print(f"Attributes per edge: {num_attributes}", file=sys.stderr)
+    if args.attribute_names:
+        names = [n.strip() for n in args.attribute_names.split(",")]
+        print(f"Attribute names    : {names}", file=sys.stderr)
     if args.random:
         print(f"Edge values        : random [0.0, {args.random_max})", file=sys.stderr)
     else:
-        print(f"Edge values        : {args.default_value}", file=sys.stderr)
+        print(f"Edge values        : {default_values}", file=sys.stderr)
 
-    build(args.tiles_tar, args.output, args.random, args.default_value, args.random_max)
+    build(args.tiles_tar, args.output, num_attributes, args.random, default_values,
+          args.random_max)
 
 
 if __name__ == "__main__":

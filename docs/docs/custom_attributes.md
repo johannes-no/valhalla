@@ -1,42 +1,64 @@
 # Custom Attributes Sidecar
 
-Per-directed-edge float attributes stored in a separate tar archive alongside the main tile set. Use cases include routing penalties derived from data that changes independently of the OSM graph — traffic safety scores, corporate fleet restrictions, road quality surveys, etc. — without rebuilding tiles.
+Per-directed-edge float attributes stored in a separate tar archive alongside the main tile set. Multiple named attributes can be stored per edge and independently weighted at request time. Use cases include routing penalties derived from data that changes independently of the OSM graph — traffic safety scores, corporate fleet restrictions, road quality surveys, etc. — without rebuilding tiles.
 
 ## How it works
 
 The sidecar is a tar archive (`custom_attributes.tar`) with the same directory structure as `valhalla_tiles.tar`. For each routing tile `2/001/234/567.gph` there is a corresponding sidecar tile `2/001/234/567.cab`. A `.cab` file is a compact binary:
 
 ```
-[CustomAttributesTileHeader: uint32_t edge_count]
-[float value[0]]
-[float value[1]]
+[CustomAttributesTileHeader: uint32_t edge_count, uint32_t num_attributes]
+[float attr[0][0], attr[0][1], ..., attr[0][num_attributes-1]]   ← edge 0
+[float attr[1][0], attr[1][1], ..., attr[1][num_attributes-1]]   ← edge 1
 ...
-[float value[edge_count - 1]]
+[float attr[edge_count-1][0], ..., attr[edge_count-1][num_attributes-1]]
 ```
 
-Each float corresponds to one directed edge in the tile, indexed by the same local index that `GraphId::id()` returns. The index space covers all directed edges including shortcut edges (i.e. `directededgecount()` from `GraphTileHeader`). Values are application-defined; the routing engine treats them as unitless weights in `[0.0, 1.0]`.
+The data is row-major by edge: all attributes for edge 0, then all attributes for edge 1, etc. Each float corresponds to one (edge, attribute) pair. The local edge index is the same as `GraphId::id()`.
 
 `GraphReader` loads the archive at startup (read-only mmap). The archive is held open so an external process can update it while the service runs — the same pattern used by the live traffic overlay. The `GraphTile` wrapper (`CustomAttributesTile`) marks its pointers `const volatile` for the same reason.
 
+## Configuring attribute names
+
+The attribute names are defined in the `mjolnir` section of the server config. **The order of names matches the column order in the `.cab` file.** Column 0 = first name, column 1 = second name, and so on.
+
+```json
+{
+  "mjolnir": {
+    "tile_extract":              "/data/valhalla/tiles.tar",
+    "traffic_extract":           "/data/valhalla/traffic.tar",
+    "custom_attributes_extract": "/data/custom_attributes.tar",
+    "custom_attributes_names":   ["random_attribute_1", "random_attribute_2"]
+  }
+}
+```
+
+The `custom_attributes_names` array must match the `num_attributes` value baked into the `.cab` files at build time. If the names array is shorter than `num_attributes`, attributes at higher indices are accessible by `trace_attributes` using their numeric index string (`"0"`, `"1"`, ...) but are invisible to `use_custom_attributes` weighting.
+
 ## Building the sidecar tar
 
-`scripts/build_custom_attributes_tar.py` creates an initial sidecar from an existing `valhalla_tiles.tar`. Every edge gets the same default value (0.0 unless overridden).
+`scripts/build_custom_attributes_tar.py` creates an initial sidecar from an existing `valhalla_tiles.tar`. All edges get default values.
 
 ```bash
 python3 scripts/build_custom_attributes_tar.py \
     --tiles-tar /data/valhalla/tiles.tar \
     --output    /data/custom_attributes.tar \
-    --default-value 0.0
+    --num-attributes 2 \
+    --attribute-names random_attribute_1,random_attribute_2 \
+    --default-values 0.0,0.0
 ```
 
 Options:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--tiles-tar` | required | Path to the main `valhalla_tiles.tar` |
-| `--output` | required | Output path for the new sidecar tar |
-| `--default-value` | `0.0` | Float written into every edge slot |
-| `--random` | off | Fill each slot with a random value in `[0.0, 1.0)` instead of the default |
+| `--tiles-tar` | `/data/valhalla_tiles.tar` | Path to the main `valhalla_tiles.tar` |
+| `--output` | `/data/custom_attributes.tar` | Output path for the new sidecar tar |
+| `--num-attributes` | `1` | Number of float attributes stored per directed edge |
+| `--attribute-names` | — | Comma-separated names (informational; not written to the binary, but printed during build for documentation) |
+| `--default-values` | `0.0` | Comma-separated default floats, one per attribute. Fewer values than `--num-attributes` repeats the last value. |
+| `--random` | off | Fill each slot with a random value in `[0.0, --random-max)` instead of the default |
+| `--random-max` | `1.0` | Upper bound (exclusive) for random values when `--random` is set |
 
 The script reads only the `GraphTileHeader` from each tile to determine `directededgecount`. It does **not** modify the main tile tar.
 
@@ -46,23 +68,24 @@ After writing the initial archive, replace individual `.cab` entries in-place to
 
 ## Configuration
 
-Add `custom_attributes_extract` to the `mjolnir` section of your config. `valhalla_build_config` emits this key by default:
+Add `custom_attributes_extract` and `custom_attributes_names` to the `mjolnir` section of your config:
 
 ```json
 {
   "mjolnir": {
     "tile_extract":              "/data/valhalla/tiles.tar",
     "traffic_extract":           "/data/valhalla/traffic.tar",
-    "custom_attributes_extract": "/data/custom_attributes.tar"
+    "custom_attributes_extract": "/data/custom_attributes.tar",
+    "custom_attributes_names":   ["random_attribute_1", "random_attribute_2"]
   }
 }
 ```
 
-The key is optional — if the file does not exist or the key is omitted, routing proceeds normally with no custom attribute effect and no error.
+Both keys are optional — if the file does not exist or the keys are omitted, routing proceeds normally with no custom attribute effect and no error.
 
 ## Using custom attributes in a route request
 
-Set `use_custom_attribute` in the costing options. Valid range: `[0.0, 1.0]`. Default: `0.0` (disabled).
+Set `use_custom_attributes` in the costing options as a JSON object mapping attribute names to weights. Valid weight range: `[-1.0, 1.0]`. Default: empty (disabled).
 
 ```json
 {
@@ -73,54 +96,66 @@ Set `use_custom_attribute` in the costing options. Valid range: `[0.0, 1.0]`. De
   "costing": "auto",
   "costing_options": {
     "auto": {
-      "use_custom_attribute": 0.8
+      "use_custom_attributes": {
+        "random_attribute_1": 0.8,
+        "random_attribute_2": 0.3
+      }
     }
   }
 }
 ```
 
+Only names listed in `mjolnir.custom_attributes_names` are recognized. Unknown names are silently ignored. Omitted names default to weight `0.0` (no effect). The request fails gracefully if no sidecar is loaded — the weights are simply never applied.
+
 Supported costing models: `auto`, `bus`, `taxi`, `truck`, `motorcycle`, `motor_scooter`, `bicycle`, `pedestrian`.
 
 ### Cost semantics
 
-The custom attribute contributes additively to the edge cost factor:
+The custom attributes contribute additively to the edge cost factor:
 
 ```
-factor += cat->value(edge_index) * use_custom_attribute
+factor += Σ (attr_i * weight_i)   for all i where weight_i ≠ 0
 ```
 
-`factor` is then multiplied by the base edge traversal time. A `cab_value` of `1.0` with `use_custom_attribute=1.0` adds `1.0` to `factor` — equivalent to the maximum highway avoidance bias. At `use_custom_attribute=0.5` and `cab_value=1.0` the contribution is `0.5`. Edges with `cab_value=0.0` are unaffected regardless of `use_custom_attribute`.
+`factor` is then multiplied by the base edge traversal time. A `cab_value` of `1.0` with `weight=1.0` adds `1.0` to `factor` — equivalent to the maximum highway avoidance bias. Negative weights reduce the factor and can make an edge more attractive.
 
-The factor penalty is proportional to edge traversal time: a slow 10 km/h urban street receives a larger absolute cost increase than a fast 100 km/h motorway for the same `cab_value`. This is intentional for penalizing time-weighted exposure (e.g. noise, pollution), but may not suit all use cases.
+The factor penalty is proportional to edge traversal time: a slow 10 km/h urban street receives a larger absolute cost increase than a fast 100 km/h motorway for the same attribute value. This is intentional for penalizing time-weighted exposure (e.g. noise, pollution), but may not suit all use cases.
 
 ## Inspecting custom attribute values via `trace_attributes`
 
-The raw `.cab` value for each matched edge is available in `trace_attributes` responses:
+All per-edge attribute values for each matched edge are available in `trace_attributes` responses as a `custom_attributes` map:
 
 ```json
 {
   "shape": "...",
   "edges": [
     {
-      "custom_attribute": 0.42,
+      "custom_attributes": {
+        "random_attribute_1": 0.42,
+        "random_attribute_2": 0.87
+      },
       ...
     }
   ]
 }
 ```
 
-Enable it by adding `"edge.custom_attribute": true` to the `filters.attributes` list. The field is omitted (not `0.0`) when no sidecar is loaded, so clients can distinguish "no data" from a genuine zero value.
+Enable it by adding `"edge.custom_attribute": true` to the `filters.attributes` list. The object is omitted when no sidecar is loaded. Keys are the attribute names from `mjolnir.custom_attributes_names`; attributes beyond the configured names are keyed by their numeric index string (`"0"`, `"1"`, ...).
 
-`use_custom_attribute` in the costing options does **not** affect the value returned here — `custom_attribute` is always the raw `.cab` float, independent of the routing weight.
+`use_custom_attributes` in the costing options does **not** affect the values returned here — `custom_attributes` always contains the raw `.cab` floats, independent of the routing weights.
 
 ## Binary format reference
 
 ```
-Offset  Size  Type      Field
-0       4     uint32_t  edge_count
-4       4*N   float[]   value[0..edge_count-1]
+Offset              Size              Type        Field
+0                   4                 uint32_t    edge_count
+4                   4                 uint32_t    num_attributes
+8                   4*N               float       attr[edge=0][attr=0..N-1]
+8+4*N               4*N               float       attr[edge=1][attr=0..N-1]
+...
+8+(edge_count-1)*N*4  4*N             float       attr[edge=edge_count-1][attr=0..N-1]
 ```
 
-Total file size must equal `sizeof(CustomAttributesTileHeader) + edge_count * sizeof(float)` exactly. A mismatch causes the tile to be skipped with a `LOG_ERROR` at startup; routing for that tile proceeds without custom attributes.
+Total file size must equal `sizeof(CustomAttributesTileHeader) + edge_count * num_attributes * sizeof(float)` exactly. A mismatch causes the tile to be skipped with a `LOG_ERROR` at startup; routing for that tile proceeds without custom attributes.
 
 There is currently no format version field. Do not change the layout without updating both the C++ reader (`valhalla/baldr/custom_attributes_tile.h`) and the Python build script simultaneously.

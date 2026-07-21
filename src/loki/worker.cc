@@ -143,6 +143,22 @@ void loki_worker_t::parse_costing(Api& api, bool allow_none) {
     }
   }
 
+  // Inject custom attribute names from server config into every Costing entry so the
+  // costing constructor can map use_custom_attributes request keys to .cab column indices.
+  try {
+    const auto& names_cfg = config.get_child("mjolnir.custom_attributes_names");
+    if (!names_cfg.empty()) {
+      for (auto& costing_pair : *options.mutable_costings()) {
+        auto* costing = &costing_pair.second;
+        if (costing->custom_attribute_names_size() == 0) {
+          for (const auto& kv : names_cfg) {
+            costing->add_custom_attribute_names(kv.second.get_value<std::string>());
+          }
+        }
+      }
+    }
+  } catch (...) {}
+
   const auto& costing_str = Costing_Enum_Name(options.costing_type());
   try {
     // For the begin and end of multimodal we expect you to be walking
