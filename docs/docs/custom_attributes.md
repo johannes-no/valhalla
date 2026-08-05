@@ -16,35 +16,25 @@ The sidecar is a tar archive (`custom_attributes.tar`) with the same directory s
 
 The data is row-major by edge: all attributes for edge 0, then all attributes for edge 1, etc. Each float corresponds to one (edge, attribute) pair. The local edge index is the same as `GraphId::id()`.
 
-`GraphReader` loads the archive at startup (read-only mmap). The archive is held open so an external process can update it while the service runs — the same pattern used by the live traffic overlay. The `GraphTile` wrapper (`CustomAttributesTile`) marks its pointers `const volatile` for the same reason.
-
-## Configuring attribute names
-
-The attribute names are defined in the `mjolnir` section of the server config. **The order of names matches the column order in the `.cab` file.** Column 0 = first name, column 1 = second name, and so on.
+The tar also contains a single `attributes.json` file at its root:
 
 ```json
-{
-  "mjolnir": {
-    "tile_extract":              "/data/valhalla/tiles.tar",
-    "traffic_extract":           "/data/valhalla/traffic.tar",
-    "custom_attributes_extract": "/data/custom_attributes.tar",
-    "custom_attributes_names":   ["random_attribute_1", "random_attribute_2"]
-  }
-}
+["scenic", "surface_quality"]
 ```
 
-The `custom_attributes_names` array must match the `num_attributes` value baked into the `.cab` files at build time. If the names array is shorter than `num_attributes`, attributes at higher indices are accessible by `trace_attributes` using their numeric index string (`"0"`, `"1"`, ...) but are invisible to `use_custom_attributes` weighting.
+This JSON array declares the attribute names in column order (column 0 = first name, column 1 = second name, etc.). `GraphReader` reads this file once at startup — no config entry is needed for the names.
+
+`GraphReader` loads the archive at startup (read-only mmap). The archive is held open so an external process can update it while the service runs — the same pattern used by the live traffic overlay. The `GraphTile` wrapper (`CustomAttributesTile`) marks its pointers `const volatile` for the same reason.
 
 ## Building the sidecar tar
 
-`scripts/build_custom_attributes_tar.py` creates an initial sidecar from an existing `valhalla_tiles.tar`. All edges get default values.
+`scripts/build_custom_attributes_tar.py` creates an initial sidecar from an existing `valhalla_tiles.tar`. All edges get default values. The `--attribute-names` flag is required and determines both the number of attributes per edge and the names written to `attributes.json` inside the tar.
 
 ```bash
 python3 scripts/build_custom_attributes_tar.py \
-    --tiles-tar /data/valhalla/tiles.tar \
-    --output    /data/custom_attributes.tar \
-    --num-attributes 2 \
-    --attribute-names random_attribute_1,random_attribute_2 \
+    --tiles-tar      /data/valhalla/tiles.tar \
+    --output         /data/custom_attributes.tar \
+    --attribute-names scenic,surface_quality \
     --default-values 0.0,0.0
 ```
 
@@ -54,9 +44,8 @@ Options:
 |------|---------|-------------|
 | `--tiles-tar` | `/data/valhalla_tiles.tar` | Path to the main `valhalla_tiles.tar` |
 | `--output` | `/data/custom_attributes.tar` | Output path for the new sidecar tar |
-| `--num-attributes` | `1` | Number of float attributes stored per directed edge |
-| `--attribute-names` | — | Comma-separated names (informational; not written to the binary, but printed during build for documentation) |
-| `--default-values` | `0.0` | Comma-separated default floats, one per attribute. Fewer values than `--num-attributes` repeats the last value. |
+| `--attribute-names` | required | Comma-separated names written to `attributes.json` in the tar. The number of names determines `num_attributes` per edge. |
+| `--default-values` | `0.0` | Comma-separated default floats, one per attribute. Fewer values than the name count repeats the last value. |
 | `--random` | off | Fill each slot with a random value in `[0.0, --random-max)` instead of the default |
 | `--random-max` | `1.0` | Upper bound (exclusive) for random values when `--random` is set |
 
@@ -68,20 +57,19 @@ After writing the initial archive, replace individual `.cab` entries in-place to
 
 ## Configuration
 
-Add `custom_attributes_extract` and `custom_attributes_names` to the `mjolnir` section of your config:
+Add only `custom_attributes_extract` to the `mjolnir` section of your config. Attribute names come from `attributes.json` inside the tar — no separate config entry is needed.
 
 ```json
 {
   "mjolnir": {
     "tile_extract":              "/data/valhalla/tiles.tar",
     "traffic_extract":           "/data/valhalla/traffic.tar",
-    "custom_attributes_extract": "/data/custom_attributes.tar",
-    "custom_attributes_names":   ["random_attribute_1", "random_attribute_2"]
+    "custom_attributes_extract": "/data/custom_attributes.tar"
   }
 }
 ```
 
-Both keys are optional — if the file does not exist or the keys are omitted, routing proceeds normally with no custom attribute effect and no error.
+This key is optional — if the file does not exist or the key is omitted, routing proceeds normally with no custom attribute effect and no error.
 
 ## Using custom attributes in a route request
 
@@ -97,15 +85,15 @@ Set `use_custom_attributes` in the costing options as a JSON object mapping attr
   "costing_options": {
     "auto": {
       "use_custom_attributes": {
-        "random_attribute_1": 0.8,
-        "random_attribute_2": 0.3
+        "scenic": 0.8,
+        "surface_quality": 0.3
       }
     }
   }
 }
 ```
 
-Only names listed in `mjolnir.custom_attributes_names` are recognized. Unknown names are silently ignored. Omitted names default to weight `0.0` (no effect). The request fails gracefully if no sidecar is loaded — the weights are simply never applied.
+Only names declared in `attributes.json` inside the tar are recognized. Unknown names are silently ignored. Omitted names default to weight `0.0` (no effect). The request fails gracefully if no sidecar is loaded — the weights are simply never applied.
 
 Supported costing models: `auto`, `bus`, `taxi`, `truck`, `motorcycle`, `motor_scooter`, `bicycle`, `pedestrian`.
 
@@ -131,8 +119,8 @@ All per-edge attribute values for each matched edge are available in `trace_attr
   "edges": [
     {
       "custom_attributes": {
-        "random_attribute_1": 0.42,
-        "random_attribute_2": 0.87
+        "scenic": 0.42,
+        "surface_quality": 0.87
       },
       ...
     }
@@ -140,7 +128,7 @@ All per-edge attribute values for each matched edge are available in `trace_attr
 }
 ```
 
-Enable it by adding `"edge.custom_attribute": true` to the `filters.attributes` list. The object is omitted when no sidecar is loaded. Keys are the attribute names from `mjolnir.custom_attributes_names`; attributes beyond the configured names are keyed by their numeric index string (`"0"`, `"1"`, ...).
+Enable it by adding `"edge.custom_attribute": true` to the `filters.attributes` list. The object is omitted when no sidecar is loaded. Keys are the attribute names from `attributes.json`; attributes beyond the declared names are keyed by their numeric index string (`"0"`, `"1"`, ...).
 
 `use_custom_attributes` in the costing options does **not** affect the values returned here — `custom_attributes` always contains the raw `.cab` floats, independent of the routing weights.
 

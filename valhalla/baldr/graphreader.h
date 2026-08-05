@@ -469,6 +469,10 @@ public:
     return !tile_extract_->traffic_tiles.empty();
   }
 
+  const std::vector<std::string>& GetCustomAttributeNames() const {
+    return tile_extract_->custom_attribute_names;
+  }
+
   /**
    * Get a pointer to a graph tile object given a GraphId.
    * @param graphid  the graphid of the tile
@@ -987,6 +991,7 @@ protected:
     std::shared_ptr<midgard::tar> archive;
     std::shared_ptr<midgard::tar> traffic_archive;
     std::shared_ptr<midgard::tar> custom_attributes_archive;
+    std::vector<std::string> custom_attribute_names;
     uint64_t checksum;
   };
   std::shared_ptr<const tile_extract_t> tile_extract_;

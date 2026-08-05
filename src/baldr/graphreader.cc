@@ -1,5 +1,6 @@
 #include "baldr/graphreader.h"
 #include "baldr/curl_tilegetter.h"
+#include "baldr/rapidjson_utils.h"
 #include "incident_singleton.h"
 #include "midgard/encoded.h"
 #include "midgard/logging.h"
@@ -148,6 +149,30 @@ GraphReader::tile_extract_t::tile_extract_t(const boost::property_tree::ptree& p
                  custom_attributes_tiles.size());
         if (corrupt_blocks) {
           LOG_WARN("Custom attributes extract had {} corrupt blocks", corrupt_blocks);
+        }
+        // Read attribute names from the descriptor embedded in the tar.
+        custom_attributes_archive->for_each(
+            [this](const std::string& name, const char* data, size_t size) -> bool {
+              std::filesystem::path p{name};
+              p.make_preferred();
+              if (p.filename() != "attributes.json")
+                return true;
+              try {
+                rapidjson::Document doc;
+                doc.Parse(data, size);
+                if (doc.IsArray()) {
+                  for (const auto& v : doc.GetArray()) {
+                    if (v.IsString())
+                      custom_attribute_names.emplace_back(v.GetString(), v.GetStringLength());
+                  }
+                }
+              } catch (const std::exception& e) {
+                LOG_WARN("Could not parse custom attributes descriptor: {}", e.what());
+              }
+              return false; // stop after first match
+            });
+        if (!custom_attribute_names.empty()) {
+          LOG_INFO("Custom attribute names: {} attribute(s) loaded", custom_attribute_names.size());
         }
       }
     } catch (const std::exception& e) {

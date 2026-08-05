@@ -77,8 +77,11 @@ def _add_bytes_to_tar(tf: tarfile.TarFile, name: str, data: bytes) -> None:
 
 
 def build(valhalla_tar: str, output_tar: str, num_attributes: int, randomize: bool,
-          default_values: list[float], random_max: float = 1.0) -> None:
+          default_values: list[float], attribute_names: list[str],
+          random_max: float = 1.0) -> None:
     with tarfile.open(valhalla_tar, "r:*") as src_tf, tarfile.open(output_tar, "w:") as dst_tf:
+        manifest = json.dumps(attribute_names, ensure_ascii=False).encode()
+        _add_bytes_to_tar(dst_tf, "attributes.json", manifest)
 
         tiles_processed = 0
         tiles_skipped = 0
@@ -143,17 +146,12 @@ def main() -> None:
         help="Path for the output custom_attributes.tar (default: /data/custom_attributes.tar)",
     )
     parser.add_argument(
-        "--num-attributes",
-        type=int,
-        default=1,
-        help="Number of float attributes stored per directed edge (default: 1)",
-    )
-    parser.add_argument(
         "--attribute-names",
         type=str,
-        default=None,
-        help="Comma-separated attribute names matching mjolnir.custom_attributes_names in the "
-             "server config (informational only, not written to the .cab binary)",
+        required=True,
+        help="Comma-separated attribute names written to attributes.json inside the tar "
+             "(e.g. 'scenic,surface_quality'). The service reads names from there; "
+             "no need to set mjolnir.custom_attributes_names in the config.",
     )
     parser.add_argument(
         "--random",
@@ -172,7 +170,7 @@ def main() -> None:
         type=str,
         default="0.0",
         help="Comma-separated default float values, one per attribute (default: 0.0). "
-             "Fewer values than --num-attributes repeats the last value.",
+             "Fewer values than the number of names repeats the last value.",
     )
     # Legacy single-value alias kept for backwards compatibility with old invocations.
     parser.add_argument(
@@ -183,8 +181,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Resolve effective num_attributes
-    num_attributes = max(1, args.num_attributes)
+    names = [n.strip() for n in args.attribute_names.split(",") if n.strip()]
+    if not names:
+        parser.error("--attribute-names must contain at least one non-empty name")
+
+    num_attributes = len(names)
 
     # --default-value (legacy) overrides --default-values when provided
     if args.default_value is not None:
@@ -194,16 +195,14 @@ def main() -> None:
 
     print(f"Reading tiles from : {args.tiles_tar}", file=sys.stderr)
     print(f"Writing output to  : {args.output}", file=sys.stderr)
+    print(f"Attribute names    : {names}", file=sys.stderr)
     print(f"Attributes per edge: {num_attributes}", file=sys.stderr)
-    if args.attribute_names:
-        names = [n.strip() for n in args.attribute_names.split(",")]
-        print(f"Attribute names    : {names}", file=sys.stderr)
     if args.random:
         print(f"Edge values        : random [0.0, {args.random_max})", file=sys.stderr)
     else:
         print(f"Edge values        : {default_values}", file=sys.stderr)
 
-    build(args.tiles_tar, args.output, num_attributes, args.random, default_values,
+    build(args.tiles_tar, args.output, num_attributes, args.random, default_values, names,
           args.random_max)
 
 
