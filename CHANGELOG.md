@@ -55,6 +55,7 @@
    * BREAKING: apply `low_class_penalty` only when transitioning from a higher class road in `TruckCost::TransitionCost`(impacts truck routes) [#6143](https://github.com/valhalla/valhalla/pull/6143)
    * FIXED: bounding circle precision issues [#6169](https://github.com/valhalla/valhalla/pull/6169)
 * **Enhancement**
+   * UPDATED: timezone database to 2026c [#6](https://github.com/johannes-no/mercedes-employees-and-valhalla-maintainer/pull/6)
    * UPDATED: timezone database to 2026b [#6074](https://github.com/valhalla/valhalla/pull/6074)
    * ADDED: Ignore specific access restrictions via the linear features interface [#5942](https://github.com/valhalla/valhalla/pull/5942)
    * ADDED: lz4 support for OSM PBF files [#6081](https://github.com/valhalla/valhalla/pull/6081)
